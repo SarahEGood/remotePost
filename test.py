@@ -3,6 +3,7 @@ import sqlite3
 import time
 import json
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass, asdict, field
 from typing import List, Optional
 
@@ -18,14 +19,17 @@ class Post:
     scheduled_time: Optional[datetime] = None
     platforms: List[str] = None
 
-def create_post(text, image_paths=None):
+def create_post(text, image_paths=None, alt_text=[""]):
     images = []
 
     if image_paths:
-        for path in image_paths:
-            images.append(Image(path=path))
+        for i in range(len(image_paths)):
+            images.append(Image(path=image_paths[i],
+                                alt_text=alt_text[i]))
 
-    return Post(text=text, images=images)
+    return Post(text=text,\
+                images=images
+                )
 
 def serialize_post(post):
     return json.dumps(asdict(post))
@@ -62,8 +66,10 @@ def workerLoop(creds):
         for job_id, platform, post_json in jobs:
             try:
                 post = deserialize_post(post_json)
+                print(post)
                 
                 if platform == "bluesky":
+                    print('post to bsky')
                     postToBluesky(creds, post)
 
                 cur.execute(
@@ -72,11 +78,13 @@ def workerLoop(creds):
                 )
 
             except Exception as e:
+                import traceback
                 cur.execute(
                     "UPDATE scheduled_posts SET status = 'failed' WHERE id = ?",
                     (job_id,)
                 )
                 print("Or here?")
+                traceback.print_exc()
 
         conn.commit()
         time.sleep(10)
@@ -86,14 +94,16 @@ def getCredentials():
         creds = [line.rstrip() for line in file]
     return creds
 
-def uploadImages(images):
+def uploadImages(client, images):
     uploaded = []
 
     for img in images:
+        print(img)
         with open(img.path, "rb") as f:
             blob = client.upload_blob(f.read())
             uploaded.append({
-                "image": blob,
+                "$type": "app.bsky.embed.images#image",
+                "image": blob["blob"],
                 "alt": img.alt_text or ""
             })
 
@@ -126,25 +136,33 @@ def postToBluesky(creds, post: Post):
 
     embed = None
 
+
     if post.images:
-        uploaded_images = uploadImages(post.images)
+        uploaded_images = []
+
+        for img in post.images:
+            with open(img.path, "rb") as f:
+                blob = client.upload_blob(f.read())
+
+                uploaded_images.append({
+                    "$type": "app.bsky.embed.images#image",
+                    "image": blob["blob"],  # <-- CRITICAL
+                    "alt": img.alt_text or ""
+                })
 
         embed = {
             "$type": "app.bsky.embed.images",
             "images": uploaded_images
         }
 
-    client.send_post(
-        text=post.text,
-        embed=embed
-    )
-
-def richText(creds) -> None:
-    client = Client()
-    client.login(creds[0],creds[1])
-
-    client.send_post(client_utils.TextBuilder().text('Hey everyone I made a ').link('Pixiv', 'https://www.pixiv.net/en/users/123184015').text('.'))
-
+    try:
+        client.send_post(
+            text=post.text,
+            embed=embed
+        )
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
     conn = sqlite3.connect('scheduler.db')
@@ -159,13 +177,16 @@ if __name__ == '__main__':
                 status TEXT)
     """)
 
-
-    run_at = datetime.strptime("26/04/26 6:00", "%d/%m/%y %H:%M")
-    run_at = datetime.now(timezone.utc) #temp for testing
+    # Year, Month, Day, Hour, Minute, Second
+    local_time = datetime(2026, 4, 26, 8, tzinfo=ZoneInfo("America/Los_Angeles"))
+    print(local_time)
+    run_at = local_time.astimezone(ZoneInfo("Etc/UTC"))
+    print(run_at)
 
     post = create_post(
-        "Hello",
-        ['img1.jpg', 'img2.jpg']
+        "Jojos but like, what if horse girl #Jjba #umamusume",
+        ['images/uma_kakyoin01.png'],
+        alt_text=['']
     )
 
     creds = getCredentials()
