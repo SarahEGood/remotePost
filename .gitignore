@@ -3,3 +3,6 @@ notes.txt
 images/*
 chron*
 scheduler.db
+__pycache__
+.venv
+CONTEXT.md
